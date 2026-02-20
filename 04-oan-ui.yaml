@@ -1,0 +1,105 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: oan-ui-nginx-config
+  namespace: default
+data:
+  default.conf: |
+    server {
+        listen 8081;
+        root /usr/share/nginx/html;
+        index index.html;
+
+        location /api/ {
+            proxy_pass http://oan-llm:80;
+            proxy_set_header Host oan-llm;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_read_timeout 120s;
+        }
+
+        location / {
+            try_files $uri $uri/ /index.html;
+        }
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: oan-ui
+  namespace: default
+  labels:
+    app: oan-ui
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: oan-ui
+  template:
+    metadata:
+      labels:
+        app: oan-ui
+    spec:
+      containers:
+        - name: oan-ui
+          image: kelvinprabhu/oan-ui-service:latest
+          ports:
+            - containerPort: 8081
+          env:
+            - name: VITE_API_URL
+              value: "http://oan-llm:80"
+            - name: VITE_BYPASS_AUTH
+              value: "false"
+          command: ["/bin/sh"]
+          args:
+            - -c
+            - |
+              cp /tmp/nginx-config/default.conf /etc/nginx/conf.d/default.conf &&
+              nginx -t &&
+              find /usr/share/nginx/html -type f \( -name "*.js" -o -name "*.html" \) \
+                -exec sed -i "s|http://llm\.service\.consul:8080||g" {} + &&
+              find /usr/share/nginx/html -type f \( -name "*.js" -o -name "*.html" \) \
+                -exec sed -i "s|__RUNTIME_VITE_API_URL__||g" {} + &&
+              find /usr/share/nginx/html -type f \( -name "*.js" -o -name "*.html" \) \
+                -exec sed -i 's|https\?://[^"'"'"']*:8080||g' {} + &&
+              echo "=== Verification ===" &&
+              find /usr/share/nginx/html -name "*.js" -exec grep -o "llm\.service\.consul" {} \; | wc -l &&
+              nginx -g "daemon off;"
+          volumeMounts:
+            - name: nginx-config
+              mountPath: /tmp/nginx-config
+          resources:
+            requests:
+              memory: "64Mi"
+              cpu: "100m"
+            limits:
+              memory: "128Mi"
+              cpu: "200m"
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 8081
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 8081
+            initialDelaySeconds: 15
+            periodSeconds: 20
+      volumes:
+        - name: nginx-config
+          configMap:
+            name: oan-ui-nginx-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: oan-ui
+  namespace: default
+spec:
+  selector:
+    app: oan-ui
+  ports:
+    - port: 80
+      targetPort: 8081
+  type: LoadBalancer

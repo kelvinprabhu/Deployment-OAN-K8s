@@ -1,0 +1,249 @@
+-- =============================================================
+-- OAN Telemetry Dashboard Processor — Local Database Schema
+-- Database: telemetry  |  Schema: public
+-- =============================================================
+
+-- -----------------------------------------------------------
+-- 1. winston_logs
+--    Source table: telemetry SDK writes logs here.
+--    The processor reads from this table and marks rows
+--    as processed via sync_status.
+-- -----------------------------------------------------------
+CREATE TABLE IF NOT EXISTS public.winston_logs (
+    level        CHARACTER VARYING,
+    message      CHARACTER VARYING,
+    meta         JSON,
+    "timestamp"  TIMESTAMP WITHOUT TIME ZONE DEFAULT NOW(),
+    sync_status  INTEGER DEFAULT 0
+);
+
+-- Index to speed up unprocessed log fetching
+CREATE INDEX IF NOT EXISTS idx_winston_logs_sync_status
+    ON public.winston_logs (sync_status);
+
+
+-- -----------------------------------------------------------
+-- 2. questions
+--    Stores processed OE_ITEM_RESPONSE events that contain
+--    question/answer data.
+-- -----------------------------------------------------------
+CREATE TABLE IF NOT EXISTS public.questions (
+    id                   UUID DEFAULT gen_random_uuid(),
+    unique_id            VARCHAR,
+    uid                  VARCHAR,
+    sid                  VARCHAR,
+    groupdetails         TEXT,
+    channel              VARCHAR,
+    ets                  BIGINT,
+    questiontext         TEXT,
+    questionsource       VARCHAR,
+    answertext           TEXT,
+    answer               TEXT,
+    mobile               VARCHAR,
+    username             VARCHAR,
+    email                VARCHAR,
+    role                 VARCHAR,
+    farmer_id            VARCHAR,
+    registered_location  JSONB,
+    device_location      JSONB,
+    agristack_location   JSONB,
+    is_new               SMALLINT DEFAULT 0 NOT NULL,
+    created_at           TIMESTAMP DEFAULT NOW()
+);
+
+
+-- -----------------------------------------------------------
+-- 3. feedback
+--    Stores processed feedback events (thumbs-up/down,
+--    text feedback on answers).
+-- -----------------------------------------------------------
+CREATE TABLE IF NOT EXISTS public.feedback (
+    id                   UUID DEFAULT gen_random_uuid(),
+    unique_id            VARCHAR,
+    uid                  VARCHAR,
+    sid                  VARCHAR,
+    groupdetails         JSONB,
+    channel              VARCHAR,
+    ets                  BIGINT,
+    feedbacktext         TEXT,
+    questiontext         TEXT,
+    answertext           TEXT,
+    qid                  VARCHAR,
+    feedbacktype         TEXT,
+    mobile               VARCHAR,
+    username             VARCHAR,
+    email                VARCHAR,
+    role                 VARCHAR,
+    farmer_id            VARCHAR,
+    registered_location  JSONB,
+    device_location      JSONB,
+    agristack_location   JSONB,
+    created_at           TIMESTAMP DEFAULT NOW()
+);
+
+
+-- -----------------------------------------------------------
+-- 4. errorDetails
+--    Stores processed error events from telemetry.
+-- -----------------------------------------------------------
+CREATE TABLE IF NOT EXISTS public."errorDetails" (
+    id                   UUID DEFAULT gen_random_uuid(),
+    unique_id            VARCHAR,
+    uid                  VARCHAR,
+    sid                  VARCHAR,
+    groupdetails         TEXT,
+    channel              VARCHAR,
+    ets                  BIGINT,
+    qid                  VARCHAR,
+    errortext            TEXT,
+    mobile               VARCHAR,
+    username             VARCHAR,
+    email                VARCHAR,
+    role                 VARCHAR,
+    farmer_id            VARCHAR,
+    registered_location  JSONB,
+    device_location      JSONB,
+    agristack_location   JSONB,
+    created_at           TIMESTAMP DEFAULT NOW()
+);
+
+
+-- -----------------------------------------------------------
+-- 5. dead_letter_logs
+--    Events that could not be matched to any active
+--    event processor end up here for debugging.
+-- -----------------------------------------------------------
+CREATE TABLE IF NOT EXISTS public.dead_letter_logs (
+    level        CHARACTER VARYING,
+    event_name   CHARACTER VARYING,
+    message      CHARACTER VARYING,
+    meta         JSON,
+    "timestamp"  TIMESTAMP WITHOUT TIME ZONE DEFAULT NOW(),
+    sync_status  INTEGER DEFAULT 0
+);
+
+
+-- -----------------------------------------------------------
+-- 6. event_processors
+--    Dynamic configuration table. Each row defines how a
+--    specific telemetry event type maps to a target table.
+-- -----------------------------------------------------------
+CREATE TABLE IF NOT EXISTS public.event_processors (
+    id                 SERIAL PRIMARY KEY,
+    event_type         VARCHAR NOT NULL,
+    table_name         VARCHAR NOT NULL UNIQUE,
+    field_verification VARCHAR NOT NULL,
+    field_mappings     JSONB NOT NULL,
+    is_active          BOOLEAN DEFAULT TRUE,
+    created_at         TIMESTAMP DEFAULT NOW(),
+    updated_at         TIMESTAMP DEFAULT NOW()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS event_processors_table_name_key
+    ON public.event_processors (table_name);
+
+
+-- -----------------------------------------------------------
+-- 7. leaderboard
+--    Aggregated view of user activity. Truncated and
+--    rebuilt daily by refreshLeaderboardAggregation().
+-- -----------------------------------------------------------
+CREATE TABLE IF NOT EXISTS public.leaderboard (
+    unique_id            VARCHAR NOT NULL PRIMARY KEY,
+    mobile               VARCHAR,
+    username             VARCHAR,
+    email                VARCHAR,
+    role                 VARCHAR,
+    farmer_id            VARCHAR,
+    registered_location  JSONB,
+    record_count         INTEGER,
+    village_code         BIGINT,
+    taluka_code          INTEGER,
+    district_code        INTEGER,
+    last_updated         TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+
+-- -----------------------------------------------------------
+-- 8. village_list
+--    Reference / seed data table. Populated from
+--    village_list.json via seed_villages_stream.js.
+-- -----------------------------------------------------------
+CREATE TABLE IF NOT EXISTS public.village_list (
+    village_code   INTEGER PRIMARY KEY,
+    taluka_code    INTEGER,
+    district_code  INTEGER,
+    created_at     TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+
+-- =============================================================
+-- SEED DATA — Default Event Processors
+-- =============================================================
+
+INSERT INTO public.event_processors (event_type, table_name, field_mappings, field_verification)
+VALUES
+  -- Questions processor
+  ('OE_ITEM_RESPONSE', 'questions', '{
+    "unique_id": "edata.eks.target.unique_id",
+    "uid": "uid",
+    "sid": "sid",
+    "groupDetails": "edata.eks.target.questionsDetails.groupDetails",
+    "channel": "channel",
+    "ets": "ets",
+    "questionText": "edata.eks.target.questionsDetails.questionText",
+    "questionSource": "edata.eks.target.questionsDetails.questionSource",
+    "answerText": "edata.eks.target.questionsDetails.answerText",
+    "answer": "edata.eks.target.questionsDetails.answerText.answer",
+    "mobile": "edata.eks.target.mobile",
+    "username": "edata.eks.target.username",
+    "email": "edata.eks.target.email",
+    "role": "edata.eks.target.role",
+    "farmer_id": "edata.eks.target.farmer_id",
+    "registered_location": "edata.eks.target.registered_location",
+    "device_location": "edata.eks.target.device_location",
+    "agristack_location": "edata.eks.target.agristack_location"
+  }', 'edata.eks.target.questionsDetails'),
+
+  -- Error details processor
+  ('OE_ITEM_RESPONSE', 'errorDetails', '{
+    "unique_id": "edata.eks.target.unique_id",
+    "uid": "uid",
+    "sid": "sid",
+    "channel": "channel",
+    "ets": "ets",
+    "errorText": "edata.eks.target.errorDetails.errorText",
+    "qid": "edata.eks.qid",
+    "mobile": "edata.eks.target.mobile",
+    "username": "edata.eks.target.username",
+    "email": "edata.eks.target.email",
+    "role": "edata.eks.target.role",
+    "farmer_id": "edata.eks.target.farmer_id",
+    "registered_location": "edata.eks.target.registered_location",
+    "device_location": "edata.eks.target.device_location",
+    "agristack_location": "edata.eks.target.agristack_location"
+  }', 'edata.eks.target.errorDetails'),
+
+  -- Feedback processor
+  ('OE_ITEM_RESPONSE', 'feedback', '{
+    "unique_id": "edata.eks.target.unique_id",
+    "uid": "uid",
+    "sid": "sid",
+    "groupDetails": "edata.eks.target.questionsDetails.groupDetails",
+    "channel": "channel",
+    "ets": "ets",
+    "feedbackText": "edata.eks.target.feedbackDetails.feedbackText",
+    "questionText": "edata.eks.target.feedbackDetails.questionText",
+    "answerText": "edata.eks.target.feedbackDetails.answerText",
+    "feedbackType": "edata.eks.target.feedbackDetails.feedbackType",
+    "qid": "edata.eks.qid",
+    "mobile": "edata.eks.target.mobile",
+    "username": "edata.eks.target.username",
+    "email": "edata.eks.target.email",
+    "role": "edata.eks.target.role",
+    "farmer_id": "edata.eks.target.farmer_id",
+    "registered_location": "edata.eks.target.registered_location",
+    "device_location": "edata.eks.target.device_location",
+    "agristack_location": "edata.eks.target.agristack_location"
+  }', 'edata.eks.target.feedbackDetails')
+ON CONFLICT DO NOTHING;

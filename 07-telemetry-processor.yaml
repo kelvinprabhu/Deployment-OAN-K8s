@@ -1,0 +1,63 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: telemetry-processor
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: telemetry-processor
+  template:
+    metadata:
+      labels:
+        app: telemetry-processor
+    spec:
+      containers:
+        - name: telemetry-processor
+          image: kelvinprabhu/telemetry-dashboard-processor:latest
+          ports:
+            - containerPort: 3000
+          env:
+            - name: PORT
+              value: "3000"
+            - name: LOG_LEVEL
+              value: "debug"
+            - name: NODE_ENV
+              value: "development"
+            - name: DB_USER
+              value: "localhost"
+            - name: DB_PASSWORD
+              value: "1234"
+            - name: DB_HOST
+              value: "telemetry-postgres"
+            - name: DB_PORT
+              value: "5432"
+            - name: DB_NAME
+              value: "telemetry"
+            - name: BATCH_SIZE
+              value: "500"
+            - name: CRON_SCHEDULE
+              value: "*/2 * * * *"
+            - name: LEADERBOARD_REFRESH_SCHEDULE
+              value: "0 1 * * *"
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "100m"
+            limits:
+              memory: "256Mi"
+              cpu: "300m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: telemetry-processor
+  namespace: default
+spec:
+  selector:
+    app: telemetry-processor
+  ports:
+    - port: 3000
+      targetPort: 3000
+  type: ClusterIP

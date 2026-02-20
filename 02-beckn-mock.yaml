@@ -1,0 +1,56 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: beckn-mock
+  namespace: default
+  labels:
+    app: beckn-mock
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: beckn-mock
+  template:
+    metadata:
+      labels:
+        app: beckn-mock
+    spec:
+      containers:
+        - name: beckn-mock
+          image: kelvinprabhu/beckn-mock:latest
+          ports:
+            - containerPort: 8001
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "100m"
+            limits:
+              memory: "256Mi"
+              cpu: "300m"
+          # Readiness: just check TCP port is open (avoids 404 on HTTP)
+          readinessProbe:
+            tcpSocket:
+              port: 8001
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            failureThreshold: 5
+          # Liveness: use the actual beckn endpoint from your shell script
+          livenessProbe:
+            tcpSocket:
+              port: 8001
+            initialDelaySeconds: 30
+            periodSeconds: 20
+            failureThreshold: 3
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: beckn-mock
+  namespace: default
+spec:
+  selector:
+    app: beckn-mock
+  ports:
+    - port: 8001
+      targetPort: 8001
+  type: ClusterIP

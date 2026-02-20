@@ -1,0 +1,72 @@
+# 06-telemetry-dashboard-service.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: telemetry-dashboard-service
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: telemetry-dashboard-service
+  template:
+    metadata:
+      labels:
+        app: telemetry-dashboard-service
+    spec:
+      containers:
+        - name: telemetry-dashboard-service
+          image: kelvinprabhu/oan-telementry-service:latest
+          ports:
+            - containerPort: 3001
+          env:
+            - name: PORT
+              value: "3001"
+            - name: NODE_ENV
+              value: "development"
+            - name: API_PREFIX
+              value: "/v1"
+            - name: CORS_ORIGIN
+              value: "*"
+            - name: DB_USER
+              value: "localhost"
+            - name: DB_HOST
+              value: "telemetry-postgres"
+            - name: DB_NAME
+              value: "telemetry"
+            - name: DB_PASSWORD
+              value: "1234"
+            - name: DB_PORT
+              value: "5432"
+            - name: DB_POOL_MAX
+              value: "20"
+            - name: DB_IDLE_TIMEOUT_MS
+              value: "30000"
+            - name: DB_CONN_TIMEOUT_MS
+              value: "5000"
+            - name: REDIS_HOST
+              value: "redis"
+            - name: REDIS_PORT
+              value: "6379"
+            - name: JWT_PUBLIC_KEY
+              value: "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAo2LSLXf+Y8MjMp1BaFV77zGSpJhTlTZFuraq6DVgZDT2e8apMg8o/grxcaRJi6A7H1QELh2foPgoG4lN6jXvpdrctwrG+Po1cwuCWCXokAploJYhrKRi8h1nzGEKE+ZQNTwtbVj5LJQruCDM3j5IDPa6j7wUxY/5lE9fwrcQqJ+urPVFHn4kbq/7oJ5/uik1k4/oxCGc/9kizzyTgW5rtf2LikeoqEsKwhx5UTPd6O8Hrz9Ynti27hp/lZFXaJLBAht+zLSA3JD5xhaY7uB/0cLkHHxesSwM328fUBf9BHH9nWbXfmQYk4FKzC+b6puMXyS3q7MxbX9Qxy/XaW0JfQIDAQAB"
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "100m"
+            limits:
+              memory: "256Mi"
+              cpu: "300m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: telemetry-dashboard-service
+  namespace: default
+spec:
+  selector:
+    app: telemetry-dashboard-service
+  ports:
+    - port: 3001
+      targetPort: 3001
+  type: ClusterIP

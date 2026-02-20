@@ -1,0 +1,96 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: oan-llm
+  namespace: default
+  labels:
+    app: oan-llm
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: oan-llm
+  template:
+    metadata:
+      labels:
+        app: oan-llm
+    spec:
+      containers:
+        - name: oan-llm
+          image: kelvinprabhu/oan-llm:ap-south-1
+          
+          ports:
+            - containerPort: 8000
+          env:
+            - name: REDIS_HOST
+              value: "redis"
+            - name: REDIS_PORT
+              value: "6379"
+            - name: REDIS_DB
+              value: "0"
+            - name: BAP_ID
+              value: "oan-mock"
+            - name: BAP_URI
+              value: "http://beckn-mock:8001"
+            - name: BAP_ENDPOINT
+              value: "http://beckn-mock:8001/api/v1/search"
+            - name: ENVIRONMENT
+              value: "development"
+            - name: LLM_PROVIDER
+              value: "gemini"
+            - name: LLM_MODEL_NAME
+              value: "gemini-2.5-flash"
+            - name: NOMINATIM_URL
+              value: "http://nominatim:8080"
+            # Reduce workers — critical for Minikube memory
+            - name: WEB_CONCURRENCY
+              value: "2"
+            - name: UVICORN_WORKERS
+              value: "2"
+            - name: GEMINI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: oan-secrets
+                  key: GEMINI_API_KEY
+            - name: MAPBOX_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: oan-secrets
+                  key: MAPBOX_API_TOKEN
+            - name: LOGFIRE_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: oan-secrets
+                  key: LOGFIRE_TOKEN
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "300m"
+            limits:
+              memory: "2Gi"      # increased from 1Gi
+              cpu: "1000m"
+          readinessProbe:
+            tcpSocket:
+              port: 8000
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            failureThreshold: 5
+          livenessProbe:
+            tcpSocket:
+              port: 8000
+            initialDelaySeconds: 40
+            periodSeconds: 20
+            failureThreshold: 3
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: oan-llm
+  namespace: default
+spec:
+  selector:
+    app: oan-llm
+  ports:
+    - port: 80
+      targetPort: 8000
+  type: ClusterIP

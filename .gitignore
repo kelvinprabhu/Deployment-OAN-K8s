@@ -1,0 +1,21 @@
+# Secrets
+00-secrets.yaml
+*.secret.yaml
+.env
+
+# IDs and temporary files
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# OS generated files
+Thumbs.db
+
+# Node/Logs (if any local dev happens)
+node_modules/
+npm-debug.log
+yarn-error.log
+
+# Minikube
+minikube
