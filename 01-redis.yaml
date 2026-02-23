@@ -18,9 +18,12 @@ spec:
       containers:
         - name: redis
           image: redis:7-alpine
-          args: ["redis-server", "--appendonly", "yes"]
+          args: ["redis-server", "--appendonly", "yes", "--dir", "/data"]
           ports:
             - containerPort: 6379
+          volumeMounts:
+            - name: redis-data
+              mountPath: /data
           resources:
             requests:
               memory: "64Mi"
@@ -38,6 +41,10 @@ spec:
               port: 6379
             initialDelaySeconds: 10
             periodSeconds: 20
+      volumes:
+        - name: redis-data
+          persistentVolumeClaim:
+            claimName: redis-pvc
 ---
 apiVersion: v1
 kind: Service

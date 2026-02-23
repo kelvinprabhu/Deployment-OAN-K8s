@@ -1,4 +1,7 @@
 # 05-telemetry-postgres.yaml
+# Requires: 00-secrets.yaml (telemetry-postgres-secret)
+#           00-persistent-volumes.yaml (telemetry-postgres-pvc)
+---
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -278,11 +281,20 @@ spec:
             - containerPort: 5432
           env:
             - name: POSTGRES_DB
-              value: "telemetry"
+              valueFrom:
+                secretKeyRef:
+                  name: telemetry-postgres-secret
+                  key: POSTGRES_DB
             - name: POSTGRES_USER
-              value: "localhost"
+              valueFrom:
+                secretKeyRef:
+                  name: telemetry-postgres-secret
+                  key: POSTGRES_USER
             - name: POSTGRES_PASSWORD
-              value: "1234"
+              valueFrom:
+                secretKeyRef:
+                  name: telemetry-postgres-secret
+                  key: POSTGRES_PASSWORD
           volumeMounts:
             - name: schema
               mountPath: /docker-entrypoint-initdb.d
@@ -303,7 +315,8 @@ spec:
               - key: schema.sql
                 path: schema.sql
         - name: postgres-data
-          emptyDir: {}
+          persistentVolumeClaim:
+            claimName: telemetry-postgres-pvc
 ---
 apiVersion: v1
 kind: Service

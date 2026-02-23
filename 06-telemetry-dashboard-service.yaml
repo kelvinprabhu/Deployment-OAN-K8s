@@ -1,4 +1,6 @@
 # 06-telemetry-dashboard-service.yaml
+# Requires: 00-secrets.yaml (telemetry-postgres-secret)
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -15,7 +17,7 @@ spec:
         app: telemetry-dashboard-service
     spec:
       containers:
-        - name: telemetry-dashboard-service
+        - name:   
           image: kelvinprabhu/oan-telementry-service:latest
           ports:
             - containerPort: 3001
@@ -25,17 +27,26 @@ spec:
             - name: NODE_ENV
               value: "development"
             - name: API_PREFIX
-              value: "/v1"
+              value: "/v3"
             - name: CORS_ORIGIN
               value: "*"
             - name: DB_USER
-              value: "localhost"
+              valueFrom:
+                secretKeyRef:
+                  name: telemetry-postgres-secret
+                  key: POSTGRES_USER
             - name: DB_HOST
               value: "telemetry-postgres"
             - name: DB_NAME
-              value: "telemetry"
+              valueFrom:
+                secretKeyRef:
+                  name: telemetry-postgres-secret
+                  key: POSTGRES_DB
             - name: DB_PASSWORD
-              value: "1234"
+              valueFrom:
+                secretKeyRef:
+                  name: telemetry-postgres-secret
+                  key: POSTGRES_PASSWORD
             - name: DB_PORT
               value: "5432"
             - name: DB_POOL_MAX
