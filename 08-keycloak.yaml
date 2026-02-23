@@ -1,0 +1,129 @@
+# 08-keycloak.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: keycloak-realm-config
+  namespace: default
+data:
+  oan-telemetry-realm.json: |
+    {
+      "realm": "oan-telemetry",
+      "enabled": true,
+      "clients": [
+        {
+          "clientId": "oan-telemetry-dashboard",
+          "enabled": true,
+          "publicClient": true,
+          "redirectUris": [
+            "http://localhost:8082/*",
+            "http://127.0.0.1:8082/*",
+            "*"
+          ],
+          "webOrigins": [
+            "http://localhost:8082",
+            "http://127.0.0.1:8082",
+            "+"
+          ],
+          "standardFlowEnabled": true,
+          "directAccessGrantsEnabled": true
+        }
+      ],
+      "users": [
+        {
+          "username": "kelvin",
+          "enabled": true,
+          "emailVerified": true,
+          "email": "kelvin@oan.com",
+          "firstName": "Kelvin",
+          "lastName": "Prabhu",
+          "credentials": [
+            {
+              "type": "password",
+              "value": "1234",
+              "temporary": false
+            }
+          ],
+          "realmRoles": ["default-roles-oan-telemetry"]
+        }
+      ]
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: keycloak
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: keycloak
+  template:
+    metadata:
+      labels:
+        app: keycloak
+    spec:
+      containers:
+        - name: keycloak
+          image: quay.io/keycloak/keycloak:24.0
+          # start-dev + --import-realm tells Keycloak to auto-import
+          # any realm JSON files found in /opt/keycloak/data/import/
+          args: ["start-dev", "--import-realm"]
+          ports:
+            - containerPort: 8090
+          env:
+            - name: KEYCLOAK_ADMIN
+              value: "admin"
+            - name: KEYCLOAK_ADMIN_PASSWORD
+              value: "admin"
+            - name: KC_HTTP_PORT
+              value: "8090"
+            - name: KC_HOSTNAME_STRICT
+              value: "false"
+            - name: KC_PROXY
+              value: "edge"
+          volumeMounts:
+            # Keycloak's --import-realm reads from this exact path
+            - name: realm-config
+              mountPath: /opt/keycloak/data/import
+              readOnly: true
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "250m"
+            limits:
+              memory: "1Gi"
+              cpu: "500m"
+          readinessProbe:
+            httpGet:
+              # Check the actual realm is up, not just master
+              path: /realms/oan-telemetry
+              port: 8090
+            initialDelaySeconds: 40
+            periodSeconds: 15
+            failureThreshold: 5
+          livenessProbe:
+            httpGet:
+              path: /realms/master
+              port: 8090
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            failureThreshold: 3
+      volumes:
+        - name: realm-config
+          configMap:
+            name: keycloak-realm-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: keycloak
+  namespace: default
+spec:
+  selector:
+    app: keycloak
+  type: NodePort
+  ports:
+    - port: 8090
+      targetPort: 8090
+      nodePort: 30090

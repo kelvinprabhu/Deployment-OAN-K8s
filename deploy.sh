@@ -51,7 +51,7 @@ echo "Applying OAN UI..."
 kubectl apply -f 04-oan-ui.yaml
 
 echo "Applying Telemetry UI (Keycloak & Frontend)..."
-kubectl apply -f 08-telemetry-ui-keycloak.yaml
+kubectl apply -f 08-keycloak.yaml
 
 echo "Applying Telemetry Dashboard UI..."
 kubectl apply -f 09-telemetry-dashboard-ui.yaml

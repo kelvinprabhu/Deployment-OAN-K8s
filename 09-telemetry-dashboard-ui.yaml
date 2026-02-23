@@ -1,0 +1,97 @@
+# 09-telemetry-dashboard-ui.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: telemetry-dashboard-ui
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: telemetry-dashboard-ui
+  template:
+    metadata:
+      labels:
+        app: telemetry-dashboard-ui
+    spec:
+      containers:
+        - name: telemetry-dashboard-ui
+          image: kelvinprabhu/telemetry-dashboard-ui:latest
+          ports:
+            - containerPort: 8082
+          command: ["/bin/sh"]
+          args:
+            - -c
+            - |
+              # ── Resolve the host-accessible Minikube IP ──────────────────────
+              MINIKUBE_IP=$(awk '/host\.minikube\.internal/ {print $1; exit}' /etc/hosts)
+              echo "Resolved Minikube IP: $MINIKUBE_IP"
+
+              # ── Patch all built JS/HTML assets at runtime ─────────────────────
+              # Vite bakes env vars at build time, so we sed-replace the
+              # placeholder values that were baked in during the Docker build.
+              find /usr/share/nginx/html -type f \( -name "*.js" -o -name "*.html" \) \
+                -exec sed -i \
+                  -e "s|VITE_KEYCLOAK_URL_PLACEHOLDER\|http://localhost:9090\|http://localhost:30090|http://$MINIKUBE_IP:30090|g" \
+                  -e "s|http://localhost:9090|http://$MINIKUBE_IP:30090|g" \
+                  -e "s|http://localhost:30090|http://$MINIKUBE_IP:30090|g" \
+                  -e "s|http://127.0.0.1:30090|http://$MINIKUBE_IP:30090|g" \
+                  -e "s|http://localhost:8082|http://$MINIKUBE_IP:30082|g" \
+                  -e "s|http://127.0.0.1:8082|http://$MINIKUBE_IP:30082|g" \
+                {} + || true
+
+              echo "=== Patched references ==="
+              grep -rl "30090\|30082" /usr/share/nginx/html --include="*.js" | head -5 || true
+
+              exec nginx -g "daemon off;"
+          env:
+            # ── Keycloak Authentication ──────────────────────────────────────
+            # NOTE: VITE_ vars are build-time in Vite. These K8s env vars are
+            # available to the shell entrypoint above (for sed patching) but
+            # will NOT automatically override baked-in JS values.
+            # The sed commands above handle the runtime URL replacement.
+            - name: VITE_KEYCLOAK_URL
+              value: "http://keycloak:8090"          # internal cluster DNS (for SSR / future use)
+            - name: VITE_KEYCLOAK_REALM
+              value: "oan-telemetry"
+            - name: VITE_KEYCLOAK_CLIENT_ID
+              value: "oan-telemetry-dashboard"
+
+            # ── Backend API ──────────────────────────────────────────────────
+            # /api/telemetry/v1 uses nginx proxy_pass (relative path — works from any host)
+            - name: VITE_API_SERVER_URL
+              value: "/api/telemetry/v1"
+
+            # ── Watchtower (optional) ────────────────────────────────────────
+            - name: VITE_WATCHTOWER_BASE_URL
+              value: "http://telemetry-dashboard-service:3001"
+            - name: VITE_WATCHTOWER_JWT
+              value: ""
+
+            # ── App Meta ─────────────────────────────────────────────────────
+            - name: VITE_APP_ENV
+              value: "development"
+            - name: VITE_DEBUG
+              value: "true"
+          resources:
+            requests:
+              memory: "64Mi"
+              cpu: "100m"
+            limits:
+              memory: "128Mi"
+              cpu: "200m"
+          
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: telemetry-dashboard-ui
+  namespace: default
+spec:
+  selector:
+    app: telemetry-dashboard-ui
+  type: NodePort
+  ports:
+    - port: 8082
+      targetPort: 8082
+      nodePort: 30082

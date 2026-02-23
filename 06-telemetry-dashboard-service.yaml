@@ -17,7 +17,7 @@ spec:
         app: telemetry-dashboard-service
     spec:
       containers:
-        - name:   
+        - name: telemetry-dashboard-service
           image: kelvinprabhu/oan-telementry-service:latest
           ports:
             - containerPort: 3001
