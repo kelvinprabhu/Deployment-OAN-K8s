@@ -1,0 +1,381 @@
+# ============================================================
+# MH-OAN Docker Compose — Full System with Telemetry Flow
+# Network: oan-network (bridge)
+# ============================================================
+
+services:
+
+  # ──────────────────────────────────────────────
+  # 1. Redis — In-memory cache / session store
+  # ──────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: oan-redis
+    command: ["redis-server", "--appendonly", "yes", "--dir", "/data"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    networks:
+      - oan-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # ──────────────────────────────────────────────
+  # 2. PostgreSQL — Telemetry data store
+  # ──────────────────────────────────────────────
+  telemetry-postgres:
+    image: postgres:17
+    container_name: oan-telemetry-postgres
+    ports:
+      - "5441:5432"
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-telemetry}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-1234}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ../schema.sql:/docker-entrypoint-initdb.d/schema.sql:ro
+    networks:
+      - oan-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-telemetry}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    restart: unless-stopped
+
+  # ──────────────────────────────────────────────
+  # 3. Nominatim — Geocoding / Reverse Geocoding
+  # ──────────────────────────────────────────────
+  nominatim:
+    image: mediagis/nominatim:4.4
+    container_name: oan-nominatim
+    ports:
+      - "8080:8080"
+    environment:
+      PBF_URL: ${NOMINATIM_PBF_URL:-https://download.geofabrik.de/asia/india/western-zone-latest.osm.pbf}
+      REPLICATION_URL: ${NOMINATIM_REPLICATION_URL:-https://download.geofabrik.de/asia/india/western-zone-updates}
+      NOMINATIM_PASSWORD: ${NOMINATIM_PASSWORD:-nominatim}
+      IMPORT_STYLE: full
+      THREADS: ${NOMINATIM_THREADS:-4}
+    volumes:
+      - nominatim-data:/var/lib/postgresql/14/main
+      - nominatim-flatnode:/nominatim/flatnode
+    networks:
+      - oan-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/status"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 600s  # Initial import can take 10+ minutes
+    shm_size: "1g"
+    restart: unless-stopped
+
+  # ──────────────────────────────────────────────
+  # 4. Beckn Mock (BAP) — Protocol mock server
+  # ──────────────────────────────────────────────
+  beckn-mock:
+    image: kelvinprabhu/beckn-mock:latest
+    container_name: oan-beckn-mock
+    ports:
+      - "8001:8001"
+    networks:
+      - oan-network
+    healthcheck:
+      test: ["CMD-SHELL", "wget --spider -q http://localhost:8001 || exit 0"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    restart: unless-stopped
+
+  # ──────────────────────────────────────────────
+  # 5. OAN LLM — FastAPI backend (Gemini)
+  # ──────────────────────────────────────────────
+  oan-llm:
+    image: kelvinprabhu/oan-llm:ap-south-1
+    container_name: oan-llm
+    ports:
+      - "8000:8000"
+    environment:
+      # Redis
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_DB: "0"
+      # LLM
+      LLM_PROVIDER: ${LLM_PROVIDER:-gemini}
+      LLM_MODEL_NAME: ${LLM_MODEL_NAME:-gemini-2.5-flash}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:?GEMINI_API_KEY is required}
+      # Maps
+      MAPBOX_API_TOKEN: ${MAPBOX_API_TOKEN:?MAPBOX_API_TOKEN is required}
+      # Beckn / BAP
+      BAP_ID: "oan-mock"
+      BAP_URI: "http://beckn-mock:8001"
+      BAP_ENDPOINT: "http://beckn-mock:8001/api/v1/search"
+      # Geocoding
+      NOMINATIM_URL: "http://nominatim:8080"
+      # Telemetry / Logging
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      LOGFIRE_TOKEN: ${LOGFIRE_TOKEN:-}
+      # Workers (keep low for local dev)
+      WEB_CONCURRENCY: "2"
+      UVICORN_WORKERS: "2"
+    depends_on:
+      redis:
+        condition: service_healthy
+      beckn-mock:
+        condition: service_started
+    networks:
+      - oan-network
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/docs || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 20s
+    restart: unless-stopped
+
+  # ──────────────────────────────────────────────
+  # 6. OAN UI — Vite + Nginx frontend
+  # ──────────────────────────────────────────────
+  oan-ui:
+    image: kelvinprabhu/oan-ui-service:yaseen-version
+    container_name: oan-ui
+    ports:
+      - "8081:8081"
+    environment:
+      VITE_API_URL: ""
+      VITE_APP_TITLE: "OAN Custom Web App"
+      VITE_DEFAULT_LANGUAGE: "en"
+      VITE_BYPASS_AUTH: ${BYPASS_AUTH:-true}
+      # Telemetry SDK settings
+      VITE_ENABLE_TELEMETRY: "true"
+      VITE_TELEMETRY_HOST: ""
+      VITE_TELEMETRY_KEY: ${VITE_TELEMETRY_KEY:-your-telemetry-api-key}
+      VITE_TELEMETRY_SECRET: ${VITE_TELEMETRY_SECRET:-your-telemetry-secret}
+      VITE_TELEMETRY_CHANNEL: ${VITE_TELEMETRY_CHANNEL:-oan-web-channel}
+      VITE_TELEMETRY_PRODUCT_ID: "oan-ui"
+      # Keycloak / JWT
+      VITE_JWT_AUDIENCE: "oan-telemetry-dashboard"
+      VITE_JWT_ISSUER: "http://localhost:8082/realms/oan-telemetry"
+      VITE_JWT_EXPIRY_DAYS: "365"
+    volumes:
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      oan-llm:
+        condition: service_healthy
+    networks:
+      - oan-network
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8081 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  # ──────────────────────────────────────────────
+  # 7. Telemetry Dashboard Service — REST API
+  # ──────────────────────────────────────────────
+  telemetry-dashboard-service:
+    image: kelvinprabhu/oan-telementry-service:latest
+    container_name: oan-telemetry-dashboard-service
+    ports:
+      - "3001:3001"
+    environment:
+      PORT: "3001"
+      NODE_ENV: ${ENVIRONMENT:-development}
+      API_PREFIX: "/v3"
+      CORS_ORIGIN: "*"
+      # Database
+      DB_USER: ${POSTGRES_USER:-postgres}
+      DB_PASSWORD: ${POSTGRES_PASSWORD:-1234}
+      DB_HOST: telemetry-postgres
+      DB_PORT: "5432"
+      DB_NAME: ${POSTGRES_DB:-telemetry}
+      DB_POOL_MAX: "20"
+      DB_IDLE_TIMEOUT_MS: "30000"
+      DB_CONN_TIMEOUT_MS: "5000"
+      # Redis
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      # JWT
+      JWT_PUBLIC_KEY: ${JWT_PUBLIC_KEY:-}
+    depends_on:
+      telemetry-postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - oan-network
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:3001/v3/health || wget --spider -q http://localhost:3001 || exit 0"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    restart: unless-stopped
+
+  # ──────────────────────────────────────────────
+  # 8. Telemetry Processor — Cron-based log processor
+  # ──────────────────────────────────────────────
+  telemetry-processor:
+    image: kelvinprabhu/telemetry-dashboard-processor:latest
+    container_name: oan-telemetry-processor
+    ports:
+      - "3000:3000"
+    environment:
+      PORT: "3000"
+      LOG_LEVEL: "debug"
+      NODE_ENV: ${ENVIRONMENT:-development}
+      # Database
+      DB_USER: ${POSTGRES_USER:-postgres}
+      DB_PASSWORD: ${POSTGRES_PASSWORD:-1234}
+      DB_HOST: telemetry-postgres
+      DB_PORT: "5432"
+      DB_NAME: ${POSTGRES_DB:-telemetry}
+      # Processing schedule
+      BATCH_SIZE: "500"
+      CRON_SCHEDULE: "*/2 * * * *"
+      LEADERBOARD_REFRESH_SCHEDULE: "0 1 * * *"
+    depends_on:
+      telemetry-postgres:
+        condition: service_healthy
+    networks:
+      - oan-network
+    restart: unless-stopped
+
+  # ──────────────────────────────────────────────
+  # 9. Keycloak — Identity & Access Management
+  # ──────────────────────────────────────────────
+  keycloak:
+    image: quay.io/keycloak/keycloak:24.0
+    container_name: oan-keycloak
+    command: ["start-dev", "--import-realm"]
+    ports:
+      - "8082:8080"
+    environment:
+      KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN:-admin}
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-admin}
+      KC_HTTP_PORT: "8080"
+      KC_HOSTNAME_STRICT: "false"
+      KC_PROXY: "edge"
+    volumes:
+      - ./keycloak-realm.json:/opt/keycloak/data/import/oan-telemetry-realm.json:ro
+    networks:
+      - oan-network
+    healthcheck:
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/localhost/8080 && echo -e 'GET /realms/master HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n' >&3 && cat <&3 | head -1 | grep -q '200 OK'"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+    restart: unless-stopped
+
+  # ──────────────────────────────────────────────
+  # 10. Telemetry Dashboard UI — React frontend
+  # ──────────────────────────────────────────────
+  telemetry-dashboard-ui:
+    image: oan-telemetry-ui:test
+    container_name: oan-telemetry-dashboard-ui
+    ports:
+      - "8881:8881"
+    entrypoint: /bin/sh
+    command:
+      - -c
+      - |
+        # ── Fix 414 Request-URI Too Large for Keycloak Redirects ──
+        echo 'client_header_buffer_size 64k;' > /etc/nginx/conf.d/buffers.conf
+        echo 'large_client_header_buffers 4 256k;' >> /etc/nginx/conf.d/buffers.conf
+        echo 'client_max_body_size 50M;' >> /etc/nginx/conf.d/buffers.conf
+        
+        # ── Reverse proxy for backend API (eliminates CORS) ──
+        cat > /etc/nginx/conf.d/api-proxy.conf <<'PROXYEOF'
+        server {
+            listen 8881;
+            root /usr/share/nginx/html;
+            index index.html;
+
+            client_header_buffer_size 64k;
+            large_client_header_buffers 4 256k;
+
+            # Proxy API calls to telemetry-dashboard-service
+            location /api/ {
+                proxy_pass http://telemetry-dashboard-service:3001/;
+                proxy_set_header Host $$host;
+                proxy_set_header X-Real-IP $$remote_addr;
+                proxy_set_header X-Forwarded-For $$proxy_add_x_forwarded_for;
+                proxy_set_header X-Forwarded-Proto $$scheme;
+                proxy_read_timeout 120s;
+                proxy_connect_timeout 10s;
+            }
+
+            # SPA fallback
+            location / {
+                try_files $$uri $$uri/ /index.html;
+            }
+        }
+        PROXYEOF
+
+        # Remove the default config to avoid port conflict
+        rm -f /etc/nginx/conf.d/default.conf
+
+        # ── Generate runtime config.js for Keycloak & API URLs ──
+        /docker-entrypoint.d/40-generate-config.sh
+        
+        exec nginx -g "daemon off;"
+    environment:
+      # Keycloak
+      VITE_KEYCLOAK_URL: "http://localhost:8082"
+      VITE_KEYCLOAK_REALM: "oan-telemetry"
+      VITE_KEYCLOAK_CLIENT_ID: "oan-telemetry-dashboard"
+      # Backend API — routed through nginx proxy to avoid CORS
+      VITE_API_SERVER_URL: "http://localhost:8881/api"
+      # Watchtower
+      VITE_WATCHTOWER_BASE_URL: "http://telemetry-dashboard-service:3001"
+      VITE_WATCHTOWER_JWT: ""
+      # App
+      VITE_APP_ENV: ${ENVIRONMENT:-development}
+      VITE_DEBUG: "true"
+    depends_on:
+      telemetry-dashboard-service:
+        condition: service_started
+      keycloak:
+        condition: service_started
+    networks:
+      - oan-network
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8881 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+# ──────────────────────────────────────────────
+# Volumes (persistent storage)
+# ──────────────────────────────────────────────
+volumes:
+  redis-data:
+    driver: local
+  postgres-data:
+    driver: local
+  nominatim-data:
+    driver: local
+  nominatim-flatnode:
+    driver: local
+
+# ──────────────────────────────────────────────
+# Network
+# ──────────────────────────────────────────────
+networks:
+  oan-network:
+    driver: bridge
+    name: oan-network
